@@ -190,7 +190,7 @@ export interface TaskWithPlannedForDayIndication extends TaskWithoutReminder {
 }
 
 export interface TaskWithSubTasks extends Task {
-  readonly subTasks: Task[];
+  readonly subTasks: TaskWithSubTasks[];
 }
 
 // make title required and add optional property for possible related (parent) task

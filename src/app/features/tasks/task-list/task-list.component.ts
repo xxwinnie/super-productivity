@@ -173,14 +173,19 @@ export class TaskListComponent implements OnDestroy, AfterViewInit {
         return false;
       }
 
-      // Subtasks can move within subtask lists (where listModelId is a task ID)
+      // Subtasks (at any depth) can move into any subtask list
+      // (listModelId is a task ID, not one of the named top-level lists)
       if (!PARENT_ALLOWED_LISTS.includes(targetModelId)) {
+        // Prevent dropping a task onto its own subtask list (would create a loop)
+        if (targetModelId === task.id) {
+          return false;
+        }
         return true;
       }
       return false;
     }
 
-    // Parent tasks: allow drops to PARENT_ALLOWED_LISTS
+    // Root-level tasks: allow drops to PARENT_ALLOWED_LISTS
     if (PARENT_ALLOWED_LISTS.includes(targetModelId)) {
       return true;
     }

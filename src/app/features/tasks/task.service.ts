@@ -1338,8 +1338,17 @@ export class TaskService {
           : this._globalConfigService.cfg()?.tasks?.defaultProjectId || INBOX_PROJECT.id;
     }
 
-    // Validate that we have a valid task before returning
-    typia.assert<Task>(d1);
+    // Validate that we have a valid task before returning.
+    // typia.assert requires the typia/lib/transform compiler plugin (ts-patch).
+    // In development builds (ng serve uses esbuild, not tsc), the transform is
+    // not applied, so we catch NoTransformConfigurationError and skip validation.
+    try {
+      typia.assert<Task>(d1);
+    } catch (e: unknown) {
+      if ((e as Error)?.constructor?.name !== 'NoTransformConfigurationError') {
+        throw e;
+      }
+    }
 
     if (d1.projectId === undefined) {
       return { ...d1, projectId: INBOX_PROJECT.id };

@@ -35,37 +35,45 @@ const mapSubTasksToTasks = (tasksIN: Task[]): TaskWithSubTasks[] => {
     }
   }
 
+  const mapRecursive = (task: Task, depth: number = 0): TaskWithSubTasks => {
+    // Safety limit to prevent infinite loops from circular references
+    if (depth > 50) return { ...task, subTasks: [] };
+    const subTasks: TaskWithSubTasks[] = [];
+    for (const subTaskId of task.subTaskIds) {
+      const subTask = taskMap.get(subTaskId);
+      if (subTask) subTasks.push(mapRecursive(subTask, depth + 1));
+    }
+    return { ...task, subTasks };
+  };
+
   const result: TaskWithSubTasks[] = [];
   for (const task of tasksIN) {
     // Guard against undefined tasks during sync operations
     if (!task) continue;
+    // Only start recursion from root tasks (no parent)
     if (task.parentId) continue;
-
-    if (task.subTaskIds && task.subTaskIds.length > 0) {
-      const subTasks: Task[] = [];
-      for (const subTaskId of task.subTaskIds) {
-        const subTask = taskMap.get(subTaskId);
-        if (subTask) subTasks.push(subTask);
-      }
-      result.push({ ...task, subTasks });
-    } else {
-      result.push({ ...task, subTasks: [] });
-    }
+    result.push(mapRecursive(task));
   }
   return result;
 };
 export const mapSubTasksToTask = (
   task: Task | null,
   s: TaskState,
+  depth: number = 0,
 ): TaskWithSubTasks | null => {
   if (!task) {
     return null;
   }
-  const subTasks: Task[] = [];
+  // Safety limit to prevent infinite loops from circular references
+  if (depth > 50) {
+    return { ...task, subTasks: [] };
+  }
+  const subTasks: TaskWithSubTasks[] = [];
   for (const id of task.subTaskIds) {
     const subTask = s.entities[id];
     if (subTask) {
-      subTasks.push(subTask);
+      const subTaskWithSubs = mapSubTasksToTask(subTask, s, depth + 1);
+      if (subTaskWithSubs) subTasks.push(subTaskWithSubs);
     } else {
       devError('Task data not found for ' + id);
     }
@@ -82,11 +90,14 @@ export const flattenTasks = (tasksIN: TaskWithSubTasks[]): TaskWithSubTasks[] =>
     if (!task) {
       return;
     }
-    flatTasks.push(task);
+    // Push the task itself with an empty subTasks array (it's flattened)
+    flatTasks.push({ ...task, subTasks: [] });
     if (task.subTasks && task.subTasks.length > 0) {
-      // NOTE: in order for the model to be identical we add an empty subTasks array
-      const validSubTasks = task.subTasks.filter((t) => t !== null && t !== undefined);
-      flatTasks = flatTasks.concat(validSubTasks.map((t) => ({ ...t, subTasks: [] })));
+      const validSubTasks = task.subTasks.filter(
+        (t): t is TaskWithSubTasks => t !== null && t !== undefined,
+      );
+      // Recursively flatten all descendant levels
+      flatTasks = flatTasks.concat(flattenTasks(validSubTasks));
     }
   });
   return flatTasks;
@@ -119,15 +130,16 @@ export const selectCurrentTaskOrParentWithData = createSelector(
     const currentTask = s.entities[s.currentTaskId];
     if (!currentTask) return null;
 
-    // If current task has a parent, return the parent with its subtasks
-    if (currentTask.parentId) {
-      const parentTask = s.entities[currentTask.parentId];
-      if (parentTask) {
-        return mapSubTasksToTask(parentTask, s);
-      }
+    // Walk up to the root ancestor so the detail panel always shows the top-level task
+    let rootTask: Task = currentTask;
+    const visited = new Set<string>();
+    while (rootTask.parentId && !visited.has(rootTask.parentId)) {
+      visited.add(rootTask.id);
+      const parent = s.entities[rootTask.parentId];
+      if (!parent) break;
+      rootTask = parent;
     }
-    // Otherwise return the current task
-    return mapSubTasksToTask(currentTask, s);
+    return mapSubTasksToTask(rootTask, s);
   },
 );
 
@@ -137,8 +149,8 @@ export const selectStartableTasks = createSelector(
     return s.ids
       .map((id) => s.entities[id])
       .filter(
-        (task): task is Task =>
-          !!task && !task.isDone && (!!task.parentId || task.subTaskIds.length === 0),
+        // Any leaf task (no children) at any depth is startable
+        (task): task is Task => !!task && !task.isDone && task.subTaskIds.length === 0,
       );
   },
 );

@@ -172,14 +172,20 @@ export const taskReducer = createReducer<TaskState>(
   on(setCurrentTask, (state, { id }) => {
     if (id) {
       const task = getTaskById(id, state);
-      const subTaskIds = task.subTaskIds;
-      let taskToStartId = id;
-      if (subTaskIds && subTaskIds.length) {
-        const undoneTasks = subTaskIds
-          .map((tid) => getTaskById(tid, state))
-          .filter((ta: Task) => !ta.isDone);
-        taskToStartId = undoneTasks.length ? undoneTasks[0].id : subTaskIds[0];
-      }
+
+      // Recursively find the first undone leaf task (deepest level with no children)
+      const findFirstLeaf = (taskId: string): string => {
+        const t = state.entities[taskId];
+        if (!t || !t.subTaskIds.length) return taskId;
+        const undoneSub = t.subTaskIds
+          .map((tid) => state.entities[tid])
+          .filter((ta): ta is Task => !!ta && !ta.isDone);
+        const nextId = undoneSub.length ? undoneSub[0].id : t.subTaskIds[0];
+        return findFirstLeaf(nextId);
+      };
+
+      const taskToStartId = task.subTaskIds?.length ? findFirstLeaf(id) : id;
+
       return {
         ...taskAdapter.updateOne(
           {
@@ -313,6 +319,12 @@ export const taskReducer = createReducer<TaskState>(
       newState,
     );
     newState = reCalcTimesForParentIfParent(oldPar.id, newState);
+    // Propagate time recalculation up through old parent's ancestors
+    let oldAncestorId = (newState.entities[oldPar.id] as Task | undefined)?.parentId;
+    while (oldAncestorId) {
+      newState = reCalcTimesForParentIfParent(oldAncestorId, newState);
+      oldAncestorId = (newState.entities[oldAncestorId] as Task | undefined)?.parentId;
+    }
 
     // for new parent add using anchor-based positioning
     const newParSubTaskIds = (newState.entities[newPar.id] as Task).subTaskIds;
@@ -326,6 +338,12 @@ export const taskReducer = createReducer<TaskState>(
       newState,
     );
     newState = reCalcTimesForParentIfParent(newPar.id, newState);
+    // Propagate time recalculation up through new parent's ancestors
+    let newAncestorId = (newState.entities[newPar.id] as Task | undefined)?.parentId;
+    while (newAncestorId) {
+      newState = reCalcTimesForParentIfParent(newAncestorId, newState);
+      newAncestorId = (newState.entities[newAncestorId] as Task | undefined)?.parentId;
+    }
 
     // change parent id for moving task
     newState = taskAdapter.updateOne(
@@ -517,21 +535,29 @@ export const taskReducer = createReducer<TaskState>(
   on(roundTimeSpentForDay, (state, { day, taskIds, isRoundUp, roundTo, projectId }) => {
     const isLimitToProject: boolean = !!projectId || projectId === null;
 
+    // Only update leaf tasks (no children) at any depth
     const idsToUpdateDirectly: string[] = taskIds.filter((id) => {
       const task: Task = getTaskById(id, state);
       return (
-        (task.subTaskIds.length === 0 || !!task.parentId) &&
+        task.subTaskIds.length === 0 &&
         (!isLimitToProject || task.projectId === projectId)
       );
     });
-    const subTaskIds: string[] = idsToUpdateDirectly.filter(
-      (id) => !!getTaskById(id, state).parentId,
-    );
-    const parentTaskToReCalcIds: string[] = unique<string>(
-      subTaskIds.map((id) => getTaskById(id, state).parentId as string),
+
+    // Collect all unique ancestor IDs (not just direct parents) for recalculation
+    const ancestorIdsToReCalc: string[] = unique<string>(
+      idsToUpdateDirectly.flatMap((id) => {
+        const ancestors: string[] = [];
+        let currentParentId = getTaskById(id, state).parentId;
+        while (currentParentId) {
+          ancestors.push(currentParentId);
+          currentParentId = state.entities[currentParentId]?.parentId;
+        }
+        return ancestors;
+      }),
     );
 
-    const updateSubsAndMainWithoutSubs: Update<Task>[] = idsToUpdateDirectly.map((id) => {
+    const updateLeafTasks: Update<Task>[] = idsToUpdateDirectly.map((id) => {
       const spentOnDayBefore = getTaskById(id, state).timeSpentOnDay;
       const timeSpentOnDayUpdated = {
         ...spentOnDayBefore,
@@ -546,10 +572,9 @@ export const taskReducer = createReducer<TaskState>(
       };
     });
 
-    // // update subs
-    const newState = taskAdapter.updateMany(updateSubsAndMainWithoutSubs, state);
-    // reCalc parents
-    return parentTaskToReCalcIds.reduce(
+    // Update leaf tasks then recalculate all ancestors bottom-up
+    const newState = taskAdapter.updateMany(updateLeafTasks, state);
+    return ancestorIdsToReCalc.reduce(
       (acc, parentId) => reCalcTimeSpentForParentIfParent(parentId, acc),
       newState,
     );

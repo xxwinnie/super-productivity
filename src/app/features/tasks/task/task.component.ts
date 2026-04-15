@@ -690,7 +690,7 @@ export class TaskComponent implements OnDestroy, AfterViewInit {
   }
 
   addSubTask(): void {
-    this._taskService.addSubTaskTo(this.task().parentId || this.task().id);
+    this._taskService.addSubTaskTo(this.task().id);
   }
 
   @throttle(200, { leading: true, trailing: false })

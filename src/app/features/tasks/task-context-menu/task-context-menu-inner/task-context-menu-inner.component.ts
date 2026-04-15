@@ -451,7 +451,7 @@ export class TaskContextMenuInnerComponent implements AfterViewInit, OnDestroy {
   }
 
   addSubTask(): void {
-    this._taskService.addSubTaskTo(this.task.parentId || this.task.id);
+    this._taskService.addSubTaskTo(this.task.id);
   }
 
   async duplicate(): Promise<void> {
